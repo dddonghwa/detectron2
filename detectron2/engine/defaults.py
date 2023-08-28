@@ -47,6 +47,9 @@ from detectron2.utils.logger import setup_logger
 from . import hooks
 from .train_loop import AMPTrainer, SimpleTrainer, TrainerBase
 
+import deepspeed
+import copy
+
 __all__ = [
     "create_ddp_model",
     "default_argument_parser",
@@ -130,6 +133,34 @@ Run on multiple machines:
         help="initialization URL for pytorch distributed backend. See "
         "https://pytorch.org/docs/stable/distributed.html for details.",
     )
+    # deepspeed
+    group = parser.add_argument_group('DeepSpeed', 'DeepSpeed configurations')
+    group.add_argument('--local_rank', type=int, default=-1,
+                    help='local rank passed from distributed launcher')
+
+    group.add_argument('--deepspeed',
+                       default=False,
+                       action='store_true',
+                       help='Enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)')
+
+    group.add_argument('--deepspeed_config', default=None, type=str, help='DeepSpeed json configuration file.')
+
+    group.add_argument('--deepscale',
+                       default=False,
+                       action='store_true',
+                       help='Deprecated enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)')
+
+    group.add_argument('--deepscale_config',
+                       default=None,
+                       type=str,
+                       help='Deprecated DeepSpeed json configuration file.')
+
+    group.add_argument('--deepspeed_mpi',
+                       default=False,
+                       action='store_true',
+                       help="Run via MPI, this will attempt to discover the necessary variables to initialize torch "
+                       "distributed from the MPI environment")
+
     parser.add_argument(
         "opts",
         help="""
@@ -140,6 +171,7 @@ For python-based LazyConfig, use "path.key=value".
         default=None,
         nargs=argparse.REMAINDER,
     )
+    
     return parser
 
 
@@ -376,13 +408,20 @@ class DefaultTrainer(TrainerBase):
         model = self.build_model(cfg)
         optimizer = self.build_optimizer(cfg, model)
         data_loader = self.build_train_loader(cfg)
-
+        self.scheduler = self.build_lr_scheduler(cfg, optimizer)
+        
+        if cfg.deepspeed :
+            model, optimizer, data_loader, self.scheduler = deepspeed.initialize(args=cfg,
+                      model=model,
+                      optimizer=optimizer,
+                      training_data=data_loader,
+                      lr_scheduler=self.scheduler)
+        
         model = create_ddp_model(model, broadcast_buffers=False)
         self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
             model, data_loader, optimizer
         )
-
-        self.scheduler = self.build_lr_scheduler(cfg, optimizer)
+        
         self.checkpointer = DetectionCheckpointer(
             # Assume you want to save checkpoints together with logs/statistics
             model,

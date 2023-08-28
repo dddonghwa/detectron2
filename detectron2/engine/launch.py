@@ -11,6 +11,8 @@ __all__ = ["DEFAULT_TIMEOUT", "launch"]
 
 DEFAULT_TIMEOUT = timedelta(minutes=30)
 
+import deepspeed
+
 
 def _find_free_port():
     import socket
@@ -99,13 +101,24 @@ def _distributed_worker(
         assert num_gpus_per_machine <= torch.cuda.device_count()
     global_rank = machine_rank * num_gpus_per_machine + local_rank
     try:
-        dist.init_process_group(
-            backend="NCCL" if has_gpu else "GLOO",
-            init_method=dist_url,
-            world_size=world_size,
-            rank=global_rank,
+        if args.SOLVER.DEEPSPEED :
+            deepspeed.init_distributed(
+            dist_backend="NCCL" if has_gpu else "GLOO",
             timeout=timeout,
-        )
+            init_method=dist_url,
+            rank=global_rank,
+            world_size=world_size,
+            )     
+        else :
+            dist.init_process_group(
+                backend="NCCL" if has_gpu else "GLOO",
+                init_method=dist_url,
+                world_size=world_size,
+                rank=global_rank,
+                timeout=timeout,
+            )
+        
+        
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.error("Process group URL: {}".format(dist_url))

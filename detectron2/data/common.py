@@ -337,3 +337,7 @@ class AspectRatioGroupedDataset(data.IterableDataset):
                 # guaranteed to execute
                 del bucket[:]
                 yield data
+                
+    def __len__(self):
+        return len(self.dataset)//self.batch_size
+    
